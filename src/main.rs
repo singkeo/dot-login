@@ -1,5 +1,3 @@
-mod runtime;
-
 use std::{fmt, io};
 use std::error::Error;
 use std::fmt::{Debug, Pointer};
@@ -37,11 +35,10 @@ use substrate_api_client::rpc::WsRpcClient;
 use subxt::{OnlineClient, PolkadotConfig};
 use subxt::config::polkadot;
 use subxt::dynamic::tx;
-use subxt::ext::scale_value::{Composite, Primitive};
+use subxt::ext::scale_value::{Composite, Primitive, value};
 use subxt::runtime_api::Payload;
 use subxt::utils::{AccountId32, MultiAddress};
 use subxt_signer::sr25519::dev;
-use crate::runtime::api::template_module::Call;
 
 const CLIENT_ID: &str = "801054035848-vn7773nujkjq17c2lcmc3en3doonfu8u.apps.googleusercontent.com";
 
@@ -385,54 +382,24 @@ async fn main() {
                 let zk_proof = generate_zk_proof(&token, &extended_ephemeral_public_key, &salt);
                 println!("2) Generating ZkProof -> {}\n", zk_proof);
 
-                /*let client = WsRpcClient::with_default_url();
-                let mut api = Api::<AssetRuntimeConfig, _>::new(client).unwrap();
-
-                let signer = AccountKeyring::Alice.pair();
-                api.set_signer(signer.into());
-
-                let version = api.get_system_version().unwrap();
-                println!("Runtime version {} running...", version);
-
-                let function_name = "do_something";
-                let pallet = "TemplateModule";
-                let something: u32 = 2;
-
-                let xt = compose_extrinsic!(&api, pallet, function_name, something);
-                match xt {
-                    Some(extrinsic) => {
-                        match api.submit_and_watch_extrinsic_until(extrinsic, XtStatus::InBlock) {
-                            Ok(result) => {
-                                if let Some(block_hash) = result.block_hash {
-                                    println!("[+] Bloc Hash is: {:?}", block_hash);
-                                } else {
-                                    eprintln!("No Hash returned");
-                                }
-                            }
-                            Err(e) => eprintln!("Err: {:?}", e),
-                        };
-                    }
-                    None => {
-                        eprintln!("Impossible to load the extrinsinc");
-                        return;
-                    }
-                }*/
-
+                println!("Connecting to ParaChain...");
                 let api = OnlineClient::<PolkadotConfig>::from_url("ws://127.0.0.1:9944").await.unwrap();
-                println!("Connection with parachain established.");
+                println!("Connection with ParaChain established.");
 
                 let alice: MultiAddress<AccountId32, ()> = dev::alice().public_key().into();
                 let alice_pair_signer = dev::alice();
 
-                let balance_transfer_tx = tx("TemplateModule", "do_something", Composite::from(Primitive::from(32)));
+                println!("Submitting extrinsic...");
+                let zk_proof_tx = tx("ZkProofModule", "store_zk_proof", Composite::unnamed([value! { (zk_proof.as_bytes().to_vec()) }]));
 
-                api.tx().sign_and_submit_then_watch_default(&balance_transfer_tx, &alice_pair_signer).await
+                let events = api.tx().sign_and_submit_then_watch_default(&zk_proof_tx, &alice_pair_signer).await
                     .map(|e| {
-                        println!("Collection creation submitted, waiting for transaction to be finalized...");
+                        println!("Extrinsic submitted, waiting for transaction to be finalized...");
                         e
-                    }).expect("something wrong")
+                    }).expect("Error while submitting extrinsic")
                     .wait_for_finalized_success()
-                    .await.expect("no success");
+                    .await.expect("Failed to finalize extrinsic...");
+                println!("Extrinsic success: {:?}", events.extrinsic_hash());
             }
             Err(err) => {
                 println!("Other error: {:?}", err);
