@@ -3,7 +3,16 @@ use std::error::Error;
 use std::fmt::{Debug};
 use std::fs::File;
 use std::io::Read;
+use std::str::FromStr;
 use std::time::Duration;
+use ark_bls12_381::{Bls12_381, Config, Fq};
+use ark_ec::AffineRepr;
+use ark_ec::bls12::G1Affine;
+use ark_ff::UniformRand;
+use ark_groth16::{Groth16, prepare_verifying_key, Proof, ProvingKey, VerifyingKey};
+use ark_r1cs_std::fields::FieldVar;
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use base64::Engine;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
@@ -11,11 +20,6 @@ use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 use uuid::Uuid;
 use base64::engine::general_purpose::STANDARD;
-use bellperson::{Circuit, ConstraintSystem, SynthesisError};
-use bellperson::gadgets::boolean::Boolean;
-use bellperson::gadgets::multipack;
-use bellperson::gadgets::sha256::sha256;
-use bellperson::groth16::{create_random_proof, generate_random_parameters, Proof};
 use blstrs::{Bls12, Fp, Scalar};
 use crc32fast::Hasher;
 use ff::PrimeField;
@@ -143,7 +147,7 @@ pub struct Claims {
     // L'heure d'expiration du token (Expire)
     jti: String,
     // Un identifiant unique pour le token (JWT ID)
-    email: String, // Email de l'utilisateur
+    email: String,
 }
 
 impl fmt::Display for Claims {
@@ -219,7 +223,7 @@ async fn decode_google_jwt(token: &str) -> Result<Claims, Box<dyn Error>> {
     validation.set_audience(&[CLIENT_ID]);
     validation.set_issuer(&["accounts.google.com"]);
 
-    validation.insecure_disable_signature_validation(); //todo remove on production
+    validation.insecure_disable_signature_validation(); //TODO @Ahmed remove on production
 
     let token_data = decode::<Claims>(&token, &decoding_key, &validation)?;
     Ok(token_data.claims)
@@ -240,134 +244,106 @@ fn get_extended_ephemeral_public_key(public_key: &str) -> Result<BigInt, Box<dyn
     Ok(bigint)
 }
 
-fn sha256d<Scalar: PrimeField, CS: ConstraintSystem<Scalar>>(
-    mut cs: CS,
-    data: &[Boolean],
-) -> Result<Vec<Boolean>, SynthesisError> {
-    // Flip endianness of each input byte
-    let input: Vec<_> = data
-        .chunks(8)
-        .map(|c| c.iter().rev())
-        .flatten()
-        .cloned()
-        .collect();
-
-    let mid = sha256(cs.namespace(|| "SHA-256(input)"), &input)?;
-    let res = sha256(cs.namespace(|| "SHA-256(mid)"), &mid)?;
-
-    // Flip endianness of each output byte
-    Ok(res
-        .chunks(8)
-        .map(|c| c.iter().rev())
-        .flatten()
-        .cloned()
-        .collect())
+#[derive(Clone)]
+struct ZkProofCircuit {
+    pub a: Option<ark_bls12_381::Fr>,
+    pub b: Option<ark_bls12_381::Fr>,
+    pub c: Option<ark_bls12_381::Fr>,
 }
 
-fn prepare_input_data<Scalar: PrimeField>(data: &str) -> Vec<Boolean> {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let hash_result = hasher.finalize();
+impl ConstraintSynthesizer<ark_bls12_381::Fr> for ZkProofCircuit {
+    fn generate_constraints(self, cs: ConstraintSystemRef<ark_bls12_381::Fr>) -> Result<(), SynthesisError> {
+        let a = cs.new_input_variable(|| self.a.ok_or(SynthesisError::AssignmentMissing))?;
+        let b = cs.new_input_variable(|| self.b.ok_or(SynthesisError::AssignmentMissing))?;
+        let c = cs.new_input_variable(|| self.c.ok_or(SynthesisError::AssignmentMissing))?;
 
-    // Convert the hash result to bits in little-endian format
-    hash_result
-        .iter()
-        .flat_map(|byte| (0..8).map(move |i| Boolean::constant((byte >> i) & 1u8 == 1u8)))
-        .collect()
-}
-
-struct ProofData {
-    final_hash_output: Vec<Boolean>,
-}
-
-struct MyCircuit<'a> {
-    jwt_token_data: Vec<Boolean>,
-    extended_ephemeral_public_key_data: Vec<Boolean>,
-    salt_data: Vec<Boolean>,
-    proof_data: &'a mut ProofData,
-}
-
-impl<'a, Scalar: PrimeField> Circuit<Scalar> for MyCircuit<'a> {
-    fn synthesize<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        // Hash each input separately
-        let jwt_token_hash = sha256(cs.namespace(|| "SHA-256(jwt_token)"), &self.jwt_token_data)?;
-        let extended_ephemeral_public_key_hash = sha256(cs.namespace(|| "SHA-256(extended_ephemeral_public_key)"), &self.extended_ephemeral_public_key_data)?;
-        let salt_hash = sha256(cs.namespace(|| "SHA-256(salt)"), &self.salt_data)?;
-
-        // Combine the hashes into a single vector
-        let combined_hash = [jwt_token_hash, extended_ephemeral_public_key_hash, salt_hash].concat();
-
-        let final_hash = sha256d(cs.namespace(|| "SHA-256(combined_hash)"), &combined_hash)?;
-        self.proof_data.final_hash_output = final_hash.clone();
-
-        multipack::pack_into_inputs(cs.namespace(|| "pack final hash"), &final_hash)
+        //TODO @Ahmed apply a constraint
+        //cs.enforce_constraint();
+        Ok(())
     }
 }
 
-fn coord_to_b64(coord: &Fp) -> String {
-    let bytes = coord.to_bytes_be();
-    return STANDARD.encode(bytes)
+fn point_to_b64(point: G1Affine<Config>) -> (String, String) {
+    let mut x_bytes = vec![];
+    let mut y_bytes = vec![];
+    point.x.serialize_compressed(&mut x_bytes).unwrap();
+    point.y.serialize_compressed(&mut y_bytes).unwrap();
+    (STANDARD.encode(&x_bytes), STANDARD.encode(&y_bytes))
 }
 
-fn proof_to_json(proof: Proof<Bls12>, final_hash_base64: String, vk: String) -> Value {
-    let a_x = coord_to_b64(&proof.a.x());
-    let a_y = coord_to_b64(&proof.a.y());
-
-    let b_x_c0 = coord_to_b64(&proof.b.x().c0());
-    let b_x_c1 = coord_to_b64(&proof.b.x().c1());
-    let b_y_c0 = coord_to_b64(&proof.b.y().c0());
-    let b_y_c1 = coord_to_b64(&proof.b.y().c1());
-
-    let c_x = coord_to_b64(&proof.c.x());
-    let c_y = coord_to_b64(&proof.c.y());
-
-    json!({
-        "a": {"x": a_x, "y": a_y},
-        "b": {
-            "x": {"c0": b_x_c0, "c1": b_x_c1},
-            "y": {"c0": b_y_c0, "c1": b_y_c1},
-        },
-        "c": {"x": c_x, "y": c_y},
-        "public_hash": final_hash_base64,
-        "verifying_key": vk
-    })
+fn point_to_b64_2(point: &Fq) -> String {
+    let mut vec = vec![];
+    point.serialize_compressed(&mut vec).unwrap();
+    STANDARD.encode(&vec)
 }
 
 fn generate_zk_proof(jwt_token: &str, extended_ephemeral_public_key: &str, salt: &str) -> String {
+    let a_value = ark_bls12_381::Fr::from(jwt_token.as_bytes()[0]);
+    let b_value = ark_bls12_381::Fr::from(extended_ephemeral_public_key.as_bytes()[0]);
+    let c_value = ark_bls12_381::Fr::from(salt.as_bytes()[0]);
+
+    let circuit = ZkProofCircuit {
+        a: Some(a_value),
+        b: Some(b_value),
+        c: Some(c_value),
+    };
+
     let rng = &mut OsRng;
+    let params = Groth16::<Bls12_381>::generate_random_parameters_with_reduction(circuit.clone(), rng).unwrap();
+    let pvk = prepare_verifying_key(&params.vk);
 
-    let params = {
-        let c = MyCircuit { jwt_token_data: vec![], extended_ephemeral_public_key_data: vec![], salt_data: vec![], proof_data: &mut ProofData { final_hash_output: vec![] } };
-        generate_random_parameters::<Bls12, _, _>(c, &mut OsRng).unwrap()
+    let mut vk = vec![];
+    pvk.serialize_compressed(&mut vk).unwrap();
+    let vk_encoded = STANDARD.encode(&vk);
+
+    let r = ark_bls12_381::Fr::rand(rng);
+    let s = ark_bls12_381::Fr::rand(rng);
+
+    let proof = Groth16::<Bls12_381>::create_proof_with_reduction(circuit, &params, r, s).unwrap();
+
+    let (a_x, a_y) = point_to_b64(proof.a);
+    let (b_x_c0, b_x_c1) = {
+        let b_x = proof.b.x;
+        (point_to_b64_2(&b_x.c0), point_to_b64_2(&b_x.c1))
     };
-
-    let mut proof_data = ProofData { final_hash_output: Vec::new() };
-    let circuit = MyCircuit {
-        jwt_token_data: prepare_input_data::<Scalar>(jwt_token),
-        extended_ephemeral_public_key_data: prepare_input_data::<Scalar>(extended_ephemeral_public_key),
-        salt_data: prepare_input_data::<Scalar>(salt),
-        proof_data: &mut proof_data,
+    let (b_y_c0, b_y_c1) = {
+        let b_y = proof.b.y;
+        (point_to_b64_2(&b_y.c0), point_to_b64_2(&b_y.c1))
     };
-    let proof = create_random_proof(circuit, &params, rng).unwrap();
+    let (c_x, c_y) = point_to_b64(proof.c);
 
-    let final_hash_base64 = STANDARD.encode(boolean_vec_to_bytes(&proof_data.final_hash_output));
-    let mut vk_bytes = vec![];
-    (&params.vk).write(&mut vk_bytes).unwrap();
-    println!("Encoded vk length is: {}\n", vk_bytes.len());
-    let vk = STANDARD.encode(&vk_bytes);
+    let mut hasher = Sha256::new();
+    hasher.update(jwt_token.as_bytes());
+    hasher.update(extended_ephemeral_public_key.as_bytes());
+    hasher.update(salt.as_bytes());
+    let public_hash = format!("{:x}", hasher.finalize());
+    let public_hash_encoded = STANDARD.encode(public_hash);
 
-    return serde_json::to_string_pretty(&proof_to_json(proof, final_hash_base64, vk)).unwrap();
-}
-
-fn boolean_vec_to_bytes(bools: &[Boolean]) -> Vec<u8> {
-    bools.iter()
-        .enumerate()
-        .fold(vec![0u8; (bools.len() + 7) / 8], |mut acc, (i, b)| {
-            if b.get_value().unwrap_or(false) {
-                acc[i / 8] |= 1 << (i % 8);
+    // Formater la sortie en JSON
+    let json_output = json!({
+        "a": {
+            "x": a_x,
+            "y": a_y
+        },
+        "b": {
+            "x": {
+                "c0": b_x_c0,
+                "c1": b_x_c1
+            },
+            "y": {
+                "c0": b_y_c0,
+                "c1": b_y_c1
             }
-            acc
-        })
+        },
+        "c": {
+            "x": c_x,
+            "y": c_y
+        },
+        "public_hash": public_hash_encoded,
+        "verifying_key": vk_encoded
+    });
+
+    return json_output.to_string();
 }
 
 #[tokio::main]
