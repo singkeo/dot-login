@@ -1,16 +1,15 @@
 use std::{fmt, io};
 use std::error::Error;
-use std::fmt::{Debug, Pointer};
+use std::fmt::{Debug};
 use std::fs::File;
 use std::io::Read;
-use std::ptr::null;
 use std::time::Duration;
+use base64::Engine;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 use uuid::Uuid;
-use base64::{Engine as _, encode, Engine};
 use base64::engine::general_purpose::STANDARD;
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use bellperson::gadgets::boolean::Boolean;
@@ -25,19 +24,9 @@ use rand::rngs::OsRng;
 use ring::signature;
 use ring::signature::KeyPair;
 use serde_json::{json, Value};
-use sp_keyring::AccountKeyring;
-use substrate_api_client::ac_primitives::{AssetRuntimeConfig};
-use substrate_api_client::{Api, GetChainInfo, SubmitAndWatch, SubmitExtrinsic, SystemApi, XtStatus};
-use substrate_api_client::ac_compose_macros::{compose_call, compose_extrinsic};
-use substrate_api_client::ac_node_api::Metadata;
-use substrate_api_client::rpc::Error::Client;
-use substrate_api_client::rpc::WsRpcClient;
 use subxt::{OnlineClient, PolkadotConfig};
-use subxt::config::polkadot;
 use subxt::dynamic::tx;
-use subxt::ext::scale_value::{Composite, Primitive, value};
-use subxt::runtime_api::Payload;
-use subxt::utils::{AccountId32, MultiAddress};
+use subxt::ext::scale_value::{Composite, value};
 use subxt_signer::sr25519::dev;
 
 const CLIENT_ID: &str = "801054035848-vn7773nujkjq17c2lcmc3en3doonfu8u.apps.googleusercontent.com";
@@ -287,13 +276,18 @@ fn prepare_input_data<Scalar: PrimeField>(data: &str) -> Vec<Boolean> {
         .collect()
 }
 
-struct MyCircuit {
+struct ProofData {
+    final_hash_output: Vec<Boolean>,
+}
+
+struct MyCircuit<'a> {
     jwt_token_data: Vec<Boolean>,
     extended_ephemeral_public_key_data: Vec<Boolean>,
     salt_data: Vec<Boolean>,
+    proof_data: &'a mut ProofData,
 }
 
-impl<Scalar: PrimeField> Circuit<Scalar> for MyCircuit {
+impl<'a, Scalar: PrimeField> Circuit<Scalar> for MyCircuit<'a> {
     fn synthesize<CS: ConstraintSystem<Scalar>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         // Hash each input separately
         let jwt_token_hash = sha256(cs.namespace(|| "SHA-256(jwt_token)"), &self.jwt_token_data)?;
@@ -303,30 +297,29 @@ impl<Scalar: PrimeField> Circuit<Scalar> for MyCircuit {
         // Combine the hashes into a single vector
         let combined_hash = [jwt_token_hash, extended_ephemeral_public_key_hash, salt_hash].concat();
 
-        // Optionally, you can hash them again or directly expose them as public inputs
         let final_hash = sha256d(cs.namespace(|| "SHA-256(combined_hash)"), &combined_hash)?;
+        self.proof_data.final_hash_output = final_hash.clone();
 
-        // Expose the final hash as compact public inputs
         multipack::pack_into_inputs(cs.namespace(|| "pack final hash"), &final_hash)
     }
 }
 
-fn coord_to_hex(coord: &Fp) -> String {
+fn coord_to_b64(coord: &Fp) -> String {
     let bytes = coord.to_bytes_be();
-    bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
+    return STANDARD.encode(bytes)
 }
 
-fn proof_to_json(proof: Proof<Bls12>) -> Value {
-    let a_x = coord_to_hex(&proof.a.x());
-    let a_y = coord_to_hex(&proof.a.y());
+fn proof_to_json(proof: Proof<Bls12>, final_hash_base64: String, vk: String) -> Value {
+    let a_x = coord_to_b64(&proof.a.x());
+    let a_y = coord_to_b64(&proof.a.y());
 
-    let b_x_c0 = coord_to_hex(&proof.b.x().c0());
-    let b_x_c1 = coord_to_hex(&proof.b.x().c0());
-    let b_y_c0 = coord_to_hex(&proof.b.y().c0());
-    let b_y_c1 = coord_to_hex(&proof.b.y().c1());
+    let b_x_c0 = coord_to_b64(&proof.b.x().c0());
+    let b_x_c1 = coord_to_b64(&proof.b.x().c1());
+    let b_y_c0 = coord_to_b64(&proof.b.y().c0());
+    let b_y_c1 = coord_to_b64(&proof.b.y().c1());
 
-    let c_x = coord_to_hex(&proof.c.x());
-    let c_y = coord_to_hex(&proof.c.y());
+    let c_x = coord_to_b64(&proof.c.x());
+    let c_y = coord_to_b64(&proof.c.y());
 
     json!({
         "a": {"x": a_x, "y": a_y},
@@ -334,27 +327,47 @@ fn proof_to_json(proof: Proof<Bls12>) -> Value {
             "x": {"c0": b_x_c0, "c1": b_x_c1},
             "y": {"c0": b_y_c0, "c1": b_y_c1},
         },
-        "c": {"x": c_x, "y": c_y}
+        "c": {"x": c_x, "y": c_y},
+        "public_hash": final_hash_base64,
+        "verifying_key": vk
     })
 }
 
 fn generate_zk_proof(jwt_token: &str, extended_ephemeral_public_key: &str, salt: &str) -> String {
+    let rng = &mut OsRng;
+
+    let params = {
+        let c = MyCircuit { jwt_token_data: vec![], extended_ephemeral_public_key_data: vec![], salt_data: vec![], proof_data: &mut ProofData { final_hash_output: vec![] } };
+        generate_random_parameters::<Bls12, _, _>(c, &mut OsRng).unwrap()
+    };
+
+    let mut proof_data = ProofData { final_hash_output: Vec::new() };
     let circuit = MyCircuit {
         jwt_token_data: prepare_input_data::<Scalar>(jwt_token),
         extended_ephemeral_public_key_data: prepare_input_data::<Scalar>(extended_ephemeral_public_key),
         salt_data: prepare_input_data::<Scalar>(salt),
+        proof_data: &mut proof_data,
     };
-
-    let rng = &mut OsRng;
-
-    let params = {
-        let c = MyCircuit { jwt_token_data: vec![], extended_ephemeral_public_key_data: vec![], salt_data: vec![] };
-        generate_random_parameters::<Bls12, _, _>(c, &mut OsRng).unwrap()
-    };
-
     let proof = create_random_proof(circuit, &params, rng).unwrap();
 
-    return serde_json::to_string_pretty(&proof_to_json(proof)).unwrap();
+    let final_hash_base64 = STANDARD.encode(boolean_vec_to_bytes(&proof_data.final_hash_output));
+    let mut vk_bytes = vec![];
+    (&params.vk).write(&mut vk_bytes).unwrap();
+    println!("Encoded vk length is: {}\n", vk_bytes.len());
+    let vk = STANDARD.encode(&vk_bytes);
+
+    return serde_json::to_string_pretty(&proof_to_json(proof, final_hash_base64, vk)).unwrap();
+}
+
+fn boolean_vec_to_bytes(bools: &[Boolean]) -> Vec<u8> {
+    bools.iter()
+        .enumerate()
+        .fold(vec![0u8; (bools.len() + 7) / 8], |mut acc, (i, b)| {
+            if b.get_value().unwrap_or(false) {
+                acc[i / 8] |= 1 << (i % 8);
+            }
+            acc
+        })
 }
 
 #[tokio::main]
@@ -386,7 +399,6 @@ async fn main() {
                 let api = OnlineClient::<PolkadotConfig>::from_url("ws://127.0.0.1:9944").await.unwrap();
                 println!("Connection with ParaChain established.");
 
-                let alice: MultiAddress<AccountId32, ()> = dev::alice().public_key().into();
                 let alice_pair_signer = dev::alice();
 
                 println!("Submitting extrinsic...");
