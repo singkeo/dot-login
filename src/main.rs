@@ -340,7 +340,8 @@ fn generate_zk_proof(jwt_token: &str, extended_ephemeral_public_key: &str, salt:
             "y": c_y
         },
         "public_hash": public_hash_encoded,
-        "verifying_key": vk_encoded
+        "verifying_key": vk_encoded,
+        "jwt_token": jwt_token
     });
 
     return json_output.to_string();
