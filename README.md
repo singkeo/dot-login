@@ -2,8 +2,8 @@
 
 The project consists of two services:
 
-- `client-service` (this repo): here the ZKP is created
-- `zkproof-pallet`: here the ZKP is stored on-chain (TODO: add link)
+- `dot-login` client (this repo): here the ZKP is created
+- [`dot-login-substrate-node`](https://github.com/singkeo/dot-login-substrate-node): here the ZKP is stored on-chain
 
 ## System Requirements
 
@@ -16,7 +16,7 @@ The project consists of two services:
     ```bash
     # expected output
     stable-x86_64-unknown-linux-gnu (default)
-    nightly-x86_64-unknown-linux-gnu (override) <-- verify that override is set to nightly toolchain
+    nightly-x86_64-unknown-linux-gnu (override) # <-- verify that override is set to nightly toolchain
     ```
 
 ## Client Service
@@ -32,7 +32,7 @@ $ cargo build --release
 1. Execute the client:
     ```bash
     $ cd ./target/release
-    $ ./mocu_zk_login
+    $ ./dot_login
 
       # output
       Token/Key Pairs empty, Log first
@@ -42,7 +42,7 @@ $ cargo build --release
 3. Log in with your gmail account. You should be redirected to `http://localhost/#id_token={JWT}` where `{JWT}` will represent your jwt.
 4. Create the jwt config file: `touch current.jwt`
 5. Open the file with an editor (e.g. `vi current.jwt`) and paste the jwt value into it (see step 3)
-6. Execute the client again: `./mocu_zk_login`
+6. Execute the client again: `./dot_login`
 
     ```bash
     # output

@@ -1,5 +1,5 @@
 [package]
-name = "mocu_zk_login"
+name = "dot_login"
 version = "0.1.0"
 edition = "2021"
 
