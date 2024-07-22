@@ -411,3 +411,56 @@ fn start_log() {
 
     println!("Google OAuth login: {}", auth_url);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_save_key_pair_to_file() {
+        let result = save_key_pair_to_file("private_key_test", "public_key_test");
+        assert!(result.is_ok());
+
+        let key_pair = read_key_pair_from_file().unwrap();
+        assert_eq!(key_pair.private_key, "private_key_test");
+        assert_eq!(key_pair.public_key, "public_key_test");
+    }
+
+    #[test]
+    fn test_generate_nonce() {
+        let public_key = "test_public_key";
+        let nonce = generate_nonce(public_key);
+        assert_eq!(nonce.len(), 8); // CRC32 produces a 8-character hexadecimal string
+    }
+
+    #[test]
+    fn test_generate_google_oauth2_url() {
+        let redirect_uri = "http://localhost";
+        let nonce = "test_nonce";
+        let url = generate_google_oauth2_url(redirect_uri, nonce);
+        assert!(url.contains(CLIENT_ID));
+        assert!(url.contains("response_type=id_token"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost"));
+        assert!(url.contains("scope=openid+email"));
+        assert!(url.contains("nonce=test_nonce"));
+    }
+
+    #[test]
+    fn test_generate_user_salt() {
+        let claims = Claims {
+            iss: "issuer".to_string(),
+            azp: "authorized_party".to_string(),
+            aud: "audience".to_string(),
+            sub: "subject".to_string(),
+            nonce: "nonce".to_string(),
+            nbf: 0,
+            iat: 0,
+            exp: 0,
+            jti: "jwt_id".to_string(),
+            email: "email@example.com".to_string(),
+        };
+
+        let salt = generate_user_salt(&claims);
+        assert_eq!(salt, "2f92e1ca1c1a318145beb4a301c140ca079620730f6ce48f8bdb0d56091ff354");
+    }
+}
