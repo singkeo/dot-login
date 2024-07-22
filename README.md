@@ -21,13 +21,64 @@ The project consists of two services:
 
 ## Client Service
 
-### Build
+### Docker
+
+#### Build Docker image
+
+```
+docker build -t dot-login-client .
+docker image ls
+```
+
+expected output:
+```
+# docker image ls
+REPOSITORY          TAG       IMAGE ID       CREATED       SIZE
+dot-login-client    latest    ec2046278f3f   5 hours ago   8.07GB
+```
+
+
+#### Run Docker container
+
+1. Run the container in interactive mode (`/bin/bash`) in order to follow the tutorial:
+
+    ```
+    docker run -it --rm rust-dot-login /bin/bash
+    ```
+
+2. Inside the container, you can run the application and follow the manual steps to complete the login process and generate the ZKP.
+
+    ```
+    cd ./target/release
+    ./dot_login
+    ```
+
+3. Copy the login URL into a browser, log in with your gmail account, and get redirected to http://localhost/#id_token={JWT} where {JWT} represents your JWT. Copy the URL into an editor and extract the JWT, this will be neede for the next step.
+
+4. **Create JWT Config File:** Create a JWT config file and paste the JWT value.
+
+    ```
+    touch current.jwt
+    vi current.jwt
+    ```
+
+5. Run the Client Again: Execute the client again with the JWT.
+
+    ```
+    ./dot_login
+    ```
+
+6. **Submit ZKP to Substrate Node:** Copy the generated JSON and pass it to the substrate node by calling the extrinsic.
+
+### Local
+
+#### Build
 
 ```bash
 $ cargo build --release
 ```
 
-### Run
+#### Run
 
 1. Execute the client:
     ```bash
@@ -89,10 +140,22 @@ $ cargo build --release
     }
     ```
 
-7. Copy the JSON from step 3 and pass it to the substrate node by calling the extrinsic.
+7. Copy the JSON from step 3 and pass it to the substrate node by calling the `zkProofModule.storeZkProof` extrinsic.
 
-TODO: add more details
 
 ## Substrate Node
 
-TODO: add link
+1. Get the node up & running
+
+    ```bash
+    # 1) clone node repo
+    git clone git@github.com:singkeo/dot-login-substrate-node.git
+
+    # 2) build node
+    cargo build --release
+
+    # 3) start node (note: add --unsafe-rpc-external if you're planning to access it the node from a remote machine)
+    ./target/release/node-template --dev
+    ```
+
+2. you can now submit the zk proof that you've generated in the client to the blockchain (see previous step)

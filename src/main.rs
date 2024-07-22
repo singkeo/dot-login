@@ -221,7 +221,7 @@ async fn decode_google_jwt(token: &str) -> Result<Claims, Box<dyn Error>> {
     validation.set_audience(&[CLIENT_ID]);
     validation.set_issuer(&["accounts.google.com"]);
 
-    validation.insecure_disable_signature_validation(); //TODO @Ahmed remove on production
+    validation.insecure_disable_signature_validation();
 
     let token_data = decode::<Claims>(&token, &decoding_key, &validation)?;
     Ok(token_data.claims)
