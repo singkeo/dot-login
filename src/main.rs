@@ -1,18 +1,15 @@
 use std::{fmt, io};
 use std::error::Error;
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::Read;
-use std::str::FromStr;
 use std::time::Duration;
 use ark_bls12_381::{Bls12_381, Config, Fq};
-use ark_ec::AffineRepr;
 use ark_ec::bls12::G1Affine;
 use ark_ff::UniformRand;
-use ark_groth16::{Groth16, prepare_verifying_key, Proof, ProvingKey, VerifyingKey};
-use ark_r1cs_std::fields::FieldVar;
+use ark_groth16::{Groth16, prepare_verifying_key};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::CanonicalSerialize;
 use base64::Engine;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
@@ -20,14 +17,12 @@ use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 use uuid::Uuid;
 use base64::engine::general_purpose::STANDARD;
-use blstrs::{Bls12, Fp, Scalar};
 use crc32fast::Hasher;
-use ff::PrimeField;
 use num_bigint::{BigInt, Sign};
 use rand::rngs::OsRng;
 use ring::signature;
 use ring::signature::KeyPair;
-use serde_json::{json, Value};
+use serde_json::json;
 use subxt::{OnlineClient, PolkadotConfig};
 use subxt::dynamic::tx;
 use subxt::ext::scale_value::{Composite, value};
@@ -85,9 +80,12 @@ struct GoogleJwks {
 struct Jwk {
     n: String,
     #[serde(rename = "use")]
+    #[allow(dead_code)]
     k_use: String,
     kid: String,
+    #[allow(dead_code)]
     alg: String,
+    #[allow(dead_code)]
     kty: String,
     e: String,
 }
@@ -253,8 +251,11 @@ struct ZkProofCircuit {
 
 impl ConstraintSynthesizer<ark_bls12_381::Fr> for ZkProofCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<ark_bls12_381::Fr>) -> Result<(), SynthesisError> {
+        #[allow(dead_code)]
         let a = cs.new_input_variable(|| self.a.ok_or(SynthesisError::AssignmentMissing))?;
+        #[allow(dead_code)]
         let b = cs.new_input_variable(|| self.b.ok_or(SynthesisError::AssignmentMissing))?;
+        #[allow(dead_code)]
         let c = cs.new_input_variable(|| self.c.ok_or(SynthesisError::AssignmentMissing))?;
 
         //TODO @Ahmed apply a constraint
