@@ -7,6 +7,8 @@ The project consists of two services:
 
 ## System Requirements
 
+Currently, Linux-based operating systems are supported (e.g. Ubuntu).
+
 1. install essential tooling: `sudo apt install build-essential`
 2. install pkg-config: `apt install pkg-config`
 3. install libssl-dev: `sudo apt install libssl-dev`
