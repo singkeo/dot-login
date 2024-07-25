@@ -1,5 +1,7 @@
 # DOT Login
 
+![web3 foundation_grants_badge_black](https://github.com/user-attachments/assets/3c628f6d-36ef-4b18-bb9f-c96ec8a33a63)
+
 The project consists of two services:
 
 - `dot-login` client (this repo): here the ZKP is created
